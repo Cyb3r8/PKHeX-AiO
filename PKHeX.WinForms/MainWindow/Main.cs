@@ -64,7 +64,7 @@ public partial class Main : Form
 
     public static IReadOnlyList<string> GenderSymbols { get; private set; } = GameInfo.GenderSymbolUnicode;
     public static bool HaX => Program.HaX;
-    private static List<IPlugin> Plugins { get; }= [];
+    private static List<IPlugin> Plugins { get; } = [];
     #endregion
 
     #region Path Variables
@@ -75,7 +75,7 @@ public partial class Main : Form
     public static string CryPath => Settings.LocalResources.GetCryPath();
     private static string TemplatePath => Settings.LocalResources.GetTemplatePath();
     private static string TrainerPath => Settings.LocalResources.GetTrainerPath();
-    private const string ThreadPath = "https://projectpokemon.org/pkhex/";
+    private const string ThreadPath = "https://github.com/hexbyt3/PKHeX-ALL-IN-ONE/releases";
 
     public static PKHeXSettings Settings => Program.Settings;
 
@@ -169,7 +169,7 @@ public partial class Main : Form
         C_SAV.HaX = PKME_Tabs.HaX = HaX;
 
 #if DEBUG
-        DevUtil.AddControl(Menu_Tools);
+        DevUtil.AddDeveloperControls(Menu_Tools, Plugins);
 #endif
 
         // Select Language
@@ -229,7 +229,7 @@ public partial class Main : Form
     {
         if (ModifierKeys == Keys.Control) // triggered via hotkey
         {
-            if (DialogResult.Yes != WinFormsUtil.Prompt(MessageBoxButtons.YesNo, "Quit PKHeX?"))
+            if (DialogResult.Yes != WinFormsUtil.Prompt(MessageBoxButtons.YesNo, MsgConfirmQuitProgram))
                 return;
         }
 
@@ -1176,7 +1176,7 @@ public partial class Main : Form
         PB_Legal.Visible = true;
         bool isValid = (sender as bool?) != false;
         PB_Legal.Image = SpriteUtil.GetLegalIndicator(isValid);
-        toolTip.SetToolTip(PB_Legal, isValid ? "Valid" : "Invalid: Click for more info");
+        toolTip.SetToolTip(PB_Legal, isValid ? MsgLegalityHoverValid : MsgLegalityHoverInvalid);
     }
 
     private void PKME_Tabs_RequestShowdownExport(object sender, EventArgs e) => ClickShowdownExportPKM(sender, e);
