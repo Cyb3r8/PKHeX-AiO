@@ -132,29 +132,138 @@ public partial class Main : Form
 
     public async Task CheckForUpdates()
     {
-        Version? latestVersion;
+        string? latestTag;
         // User might not be connected to the internet or with a flaky connection.
-        try { latestVersion = UpdateUtil.GetLatestPKHeXVersion(); }
+        try 
+        { 
+            latestTag = UpdateUtil.GetLatestReleaseTag();
+        }
         catch (Exception ex)
         {
             Debug.WriteLine($"Exception while checking for latest version: {ex}");
             return;
         }
-        if (latestVersion is null || latestVersion <= Program.CurrentVersion)
+        
+        if (latestTag is null)
             return;
-
+            
+        // Clean the tags for comparison
+        var latestTagClean = latestTag.TrimStart('v');
+        var currentTag = Program.CurrentVersionString.TrimStart('v');
+        
+        // Always update LastCheckedRevision when we successfully check for updates
+        // and the current version matches the latest version
+        if (currentTag == latestTagClean)
+        {
+            // We're on the latest version, update the last checked revision
+            if (Settings.Startup.LastCheckedRevision != latestTagClean)
+            {
+                Settings.Startup.LastCheckedRevision = latestTagClean;
+                await PKHeXSettings.SaveSettings(Program.PathConfig, Settings).ConfigureAwait(false);
+            }
+            
+            // Hide the update button if it's visible
+            if (L_UpdateAvailable.Visible)
+            {
+                await InvokeAsync(() => {
+                    L_UpdateAvailable.Visible = false;
+                    L_UpdateAvailable.TabStop = false;
+                    L_UpdateAvailable.Enabled = false;
+                }).ConfigureAwait(false);
+            }
+            
+            return;
+        }
+        
+        // If we've already notified the user about this version, don't show the update button again
+        if (Settings.Startup.LastCheckedRevision == latestTagClean)
+            return;
+        
         while (!IsHandleCreated) // Wait for form to be ready
             await Task.Delay(2_000).ConfigureAwait(false);
-        await InvokeAsync(() => NotifyNewVersionAvailable(latestVersion)).ConfigureAwait(false); // invoke on GUI thread
+        await InvokeAsync(() => NotifyNewVersionAvailable(latestTag)).ConfigureAwait(false); // invoke on GUI thread
     }
 
-    private void NotifyNewVersionAvailable(Version version)
+    private void NotifyNewVersionAvailable(string versionTag)
     {
-        var date = $"{2000 + version.Major:00}{version.Minor:00}{version.Build:00}";
-        var lbl = L_UpdateAvailable;
-        lbl.Text = $"{MsgProgramUpdateAvailable} {date}";
-        lbl.Click += (_, _) => Process.Start(new ProcessStartInfo(ThreadPath) { UseShellExecute = true });
-        lbl.Visible = lbl.TabStop = lbl.Enabled = true;
+        // Display the full version tag including revision if present
+        var displayVersion = versionTag.StartsWith("v") ? versionTag.Substring(1) : versionTag;
+        var btn = L_UpdateAvailable;
+        
+        // Update dynamic text
+        btn.Text = $"📥 Update to {displayVersion}";
+        
+        // Set colors based on theme
+        if (Settings.Startup.DarkMode)
+        {
+            btn.BackColor = Color.FromArgb(28, 28, 32);
+            btn.ForeColor = Color.FromArgb(0, 220, 100); // Bright green for dark mode
+            btn.FlatAppearance.BorderColor = Color.FromArgb(0, 220, 100);
+            btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(0, 180, 80);
+            btn.FlatAppearance.MouseDownBackColor = Color.FromArgb(0, 150, 60);
+        }
+        else
+        {
+            btn.BackColor = Color.FromArgb(248, 248, 248);
+            btn.ForeColor = Color.FromArgb(0, 102, 204); // Windows blue accent
+            btn.FlatAppearance.BorderColor = Color.FromArgb(0, 102, 204);
+            btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(230, 240, 250);
+            btn.FlatAppearance.MouseDownBackColor = Color.FromArgb(200, 220, 240);
+        }
+        
+        // Handle click event for auto-update
+        btn.Click += async (_, _) => await HandleUpdateClick(versionTag);
+        btn.Visible = btn.TabStop = btn.Enabled = true;
+    }
+    
+    private async Task HandleUpdateClick(string versionTag)
+    {
+        var btn = L_UpdateAvailable;
+        btn.Enabled = false;
+        btn.Text = "Checking...";
+        
+        try
+        {
+            // Get download URL
+            var downloadUrl = UpdateUtil.GetLatestDownloadUrl();
+            if (downloadUrl == null)
+            {
+                var result = MessageBox.Show(
+                    "Unable to automatically download the update.\n\nWould you like to open the download page in your browser?",
+                    "Auto-Update Unavailable",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Information);
+                    
+                if (result == DialogResult.Yes)
+                {
+                    Process.Start(new ProcessStartInfo(ThreadPath) { UseShellExecute = true });
+                    // Mark as checked to avoid showing the notification again
+                    Settings.Startup.LastCheckedRevision = versionTag.TrimStart('v');
+                    await PKHeXSettings.SaveSettings(Program.PathConfig, Settings).ConfigureAwait(false);
+                }
+                
+                btn.Text = $"Update to {versionTag.TrimStart('v')}";
+                btn.Enabled = true;
+                return;
+            }
+            
+            // Show update dialog
+            using var updateDialog = new UpdateProgressDialog(downloadUrl, versionTag, Settings);
+            updateDialog.ShowDialog(this);
+            
+            // Re-enable button if dialog was cancelled
+            if (btn.Visible)
+            {
+                btn.Text = $"Update to {versionTag.TrimStart('v')}";
+                btn.Enabled = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"An error occurred while updating: {ex.Message}", "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            btn.Text = $"Update to {versionTag.TrimStart('v')}";
+            btn.Enabled = true;
+        }
     }
 
     public static DrawConfig Draw { get; private set; } = new();
@@ -415,7 +524,19 @@ public partial class Main : Form
 
     private void MainMenuLivingDexBuilder(object sender, EventArgs e)
     {
-        using var form = new SAV_LivingDexBuilder(C_SAV.SAV);
+        // Create and populate trainer database from TrainerPath
+        var db = new TrainerDatabase();
+        var sav = C_SAV.SAV;
+        var dir = TrainerPath;
+        if (Directory.Exists(dir))
+        {
+            var files = Directory.EnumerateFiles(dir, "*.*", SearchOption.AllDirectories);
+            var pk = BoxUtil.GetPKMsFromPaths(files, sav.Context);
+            foreach (var f in pk)
+                db.RegisterCopy(f);
+        }
+        
+        using var form = new SAV_LivingDexBuilder(sav, db);
         if (form.ShowDialog() == DialogResult.OK)
         {
             C_SAV.SetPKMBoxes(); // refresh
@@ -1116,7 +1237,7 @@ public partial class Main : Form
     private static void DisplayLegalityReport(LegalityAnalysis la)
     {
         bool verbose = ModifierKeys == Keys.Control ^ Settings.Display.ExportLegalityAlwaysVerbose;
-        var report = la.Report(verbose);
+        var report = la.Report(CurrentLanguage, verbose);
         if (verbose)
         {
             if (Settings.Display.ExportLegalityNeverClipboard)
